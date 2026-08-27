@@ -44,6 +44,7 @@
 #include <QTimer>
 #include <QWheelEvent>
 #include <QScreen>
+#include <QInputDevice>
 
 namespace {
 
@@ -56,6 +57,34 @@ double applyWheelUnits(double accumulator, double units, int &steps)
     steps = static_cast<int>(accumulator);
     accumulator -= steps;
     return accumulator;
+}
+
+// Touchpads emit dense continuous deltas; ~8× dampening matches the old
+// debounce feel (full-height swipe ≈ 100/stepSize notches).
+constexpr double touchpadPixelDivisor = 256.0; // 32 * 8
+constexpr double touchpadAngleDivisor = QWheelEvent::DefaultDeltasPerStep * 8.0;
+
+double wheelEventUnits(const QWheelEvent *event)
+{
+    const bool touchpad = event->deviceType() == QInputDevice::DeviceType::TouchPad;
+
+    if (touchpad)
+    {
+        // Prefer pixelDelta on pads; fall back to dampened angleDelta.
+        const QPoint pixel = event->pixelDelta();
+        if (!pixel.isNull() && pixel.y() != 0)
+            return pixel.y() / touchpadPixelDivisor;
+        if (const int angleY = event->angleDelta().y(); angleY != 0)
+            return angleY / touchpadAngleDivisor;
+        return 0.0;
+    }
+
+    // Mouse / other: one physical notch (120) = one configured step.
+    if (const int angleY = event->angleDelta().y(); angleY != 0)
+        return angleY / double(QWheelEvent::DefaultDeltasPerStep);
+    if (const QPoint pixel = event->pixelDelta(); !pixel.isNull() && pixel.y() != 0)
+        return pixel.y() / 32.0;
+    return 0.0;
 }
 
 } // namespace
@@ -279,14 +308,8 @@ int VolumePopup::wheelVolumeDelta(QWheelEvent *event, int stepSize)
         return 0;
     }
 
-    // Prefer angleDelta (mouse notches); pixelDelta is for touchpads / high-res wheels.
-    double units = 0.0;
-    const int angleY = event->angleDelta().y();
-    if (angleY != 0)
-        units = angleY / double(QWheelEvent::DefaultDeltasPerStep);
-    else if (const QPoint pixel = event->pixelDelta(); !pixel.isNull() && pixel.y() != 0)
-        units = pixel.y() / 32.0;
-    else
+    const double units = wheelEventUnits(event);
+    if (units == 0.0)
         return 0;
 
     int steps = 0;
