@@ -59,31 +59,20 @@ double applyWheelUnits(double accumulator, double units, int &steps)
     return accumulator;
 }
 
-// Touchpads emit dense continuous deltas; ~8× dampening matches the old
-// debounce feel (full-height swipe ≈ 100/stepSize notches).
-constexpr double touchpadPixelDivisor = 256.0; // 32 * 8
-constexpr double touchpadAngleDivisor = QWheelEvent::DefaultDeltasPerStep * 8.0;
+// Touchpads emit dense continuous deltas. Use the same angle/pixel mapping as
+// mice, then apply a gain so a full-height swipe is nearer ~100/stepSize notches.
+// Prefer angleDelta; preferring pixelDelta with a large divisor over-damps real pads.
+constexpr double touchpadGain = 8.0;
 
-double wheelEventUnits(const QWheelEvent *event)
+double wheelEventUnits(const QWheelEvent &event)
 {
-    const bool touchpad = event->deviceType() == QInputDevice::DeviceType::TouchPad;
+    const bool touchpad = event.deviceType() == QInputDevice::DeviceType::TouchPad;
+    const double gain = touchpad ? touchpadGain : 1.0;
 
-    if (touchpad)
-    {
-        // Prefer pixelDelta on pads; fall back to dampened angleDelta.
-        const QPoint pixel = event->pixelDelta();
-        if (!pixel.isNull() && pixel.y() != 0)
-            return pixel.y() / touchpadPixelDivisor;
-        if (const int angleY = event->angleDelta().y(); angleY != 0)
-            return angleY / touchpadAngleDivisor;
-        return 0.0;
-    }
-
-    // Mouse / other: one physical notch (120) = one configured step.
-    if (const int angleY = event->angleDelta().y(); angleY != 0)
-        return angleY / double(QWheelEvent::DefaultDeltasPerStep);
-    if (const QPoint pixel = event->pixelDelta(); !pixel.isNull() && pixel.y() != 0)
-        return pixel.y() / 32.0;
+    if (const int angleY = event.angleDelta().y(); angleY != 0)
+        return angleY / (double(QWheelEvent::DefaultDeltasPerStep) * gain);
+    if (const QPoint pixel = event.pixelDelta(); !pixel.isNull() && pixel.y() != 0)
+        return pixel.y() / (32.0 * gain);
     return 0.0;
 }
 
@@ -308,7 +297,7 @@ int VolumePopup::wheelVolumeDelta(QWheelEvent *event, int stepSize)
         return 0;
     }
 
-    const double units = wheelEventUnits(event);
+    const double units = wheelEventUnits(*event);
     if (units == 0.0)
         return 0;
 
