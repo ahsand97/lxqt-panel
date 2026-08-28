@@ -59,20 +59,40 @@ double applyWheelUnits(double accumulator, double units, int &steps)
     return accumulator;
 }
 
-// Touchpads emit dense continuous deltas. Use the same angle/pixel mapping as
-// mice, then apply a gain so a full-height swipe is nearer ~100/stepSize notches.
-// Prefer angleDelta; preferring pixelDelta with a large divisor over-damps real pads.
+// Scale-down for continuous touchpad deltas (not applied to classic ±120 mouse notches).
 constexpr double touchpadGain = 8.0;
 
+// Map a wheel event to fractional "notches" (1.0 = one configured volume step).
+//
+// Mice typically emit discrete angleDelta multiples of DefaultDeltasPerStep (120).
+// Touchpads emit dense continuous angle/pixel deltas. Some mice report as TouchPad
+// but still send classic notches — treat those as mice so touchpadGain is not applied.
 double wheelEventUnits(const QWheelEvent &event)
 {
-    const bool touchpad = event.deviceType() == QInputDevice::DeviceType::TouchPad;
-    const double gain = touchpad ? touchpadGain : 1.0;
+    const auto device = event.deviceType();
+    const int angleY = event.angleDelta().y();
+    if (angleY != 0)
+    {
+        // Classic mouse notch: ±120, ±240, … Prefer this over deviceType() alone.
+        const int absAngle = qAbs(angleY);
+        const bool classicNotch = absAngle >= QWheelEvent::DefaultDeltasPerStep
+            && absAngle % QWheelEvent::DefaultDeltasPerStep == 0;
+        if (device == QInputDevice::DeviceType::Mouse || classicNotch)
+            return angleY / double(QWheelEvent::DefaultDeltasPerStep);
+        // Smooth touchpad scroll: dampen so a full-height swipe is nearer ~100/stepSize notches.
+        if (device == QInputDevice::DeviceType::TouchPad)
+            return angleY / (double(QWheelEvent::DefaultDeltasPerStep) * touchpadGain);
+        // Unknown / other devices: same scale as a mouse notch.
+        return angleY / double(QWheelEvent::DefaultDeltasPerStep);
+    }
 
-    if (const int angleY = event.angleDelta().y(); angleY != 0)
-        return angleY / (double(QWheelEvent::DefaultDeltasPerStep) * gain);
+    // No angleDelta: use pixelDelta (common on some touchpads / high-res wheels).
     if (const QPoint pixel = event.pixelDelta(); !pixel.isNull() && pixel.y() != 0)
-        return pixel.y() / (32.0 * gain);
+    {
+        if (device == QInputDevice::DeviceType::TouchPad)
+            return pixel.y() / (32.0 * touchpadGain);
+        return pixel.y() / 32.0;
+    }
     return 0.0;
 }
 
